@@ -1,5 +1,13 @@
 export type CabinType = 'engine' | 'shield' | 'weapon' | 'repair' | 'scanner';
 
+export type HeatRiskLevel = 'safe' | 'warning' | 'danger' | 'critical';
+
+export interface HeatTransfer {
+  from: CabinType;
+  to: CabinType;
+  amount: number;
+}
+
 export interface Die {
   id: string;
   value: number;
@@ -18,6 +26,11 @@ export interface Cabin {
   bonus: number;
   description: string;
   icon: string;
+  temperature: number;
+  maxTemperature: number;
+  coolant: number;
+  maxCoolant: number;
+  neighbors: CabinType[];
 }
 
 export interface Ship {
@@ -113,6 +126,18 @@ export interface GameConfig {
   maxRerolls: number;
   diceCount: number;
   enemyDamageVariance: number;
+  baseHeatPerPoint: number;
+  heatConductionThreshold: number;
+  heatConductionRate: number;
+  passiveCoolingRate: number;
+  coolantCoolingAmount: number;
+  shieldHighTempPenalty: number;
+  weaponHighTempCritBonus: number;
+  weaponHighTempDamageChance: number;
+  engineHighTempEvasionVariance: number;
+  heatWarningThreshold: number;
+  heatDangerThreshold: number;
+  heatCriticalThreshold: number;
 }
 
 export interface Upgrade {

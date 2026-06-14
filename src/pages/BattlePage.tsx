@@ -11,6 +11,8 @@ import { useGameStore } from '../store/useGameStore';
 import { useDiceStore } from '../store/useDiceStore';
 import { useShipStore } from '../store/useShipStore';
 import { hasAnyDiceAssigned } from '../utils/dice';
+import { getHeatRiskLevel, getHeatRiskColor } from '../utils/battle';
+import { useConfigStore } from '../store/useConfigStore';
 
 export const BattlePage: React.FC = () => {
   const { 
@@ -22,9 +24,11 @@ export const BattlePage: React.FC = () => {
     resetBattle,
     setDifficulty,
     isReplaying,
+    lastHeatTransfers,
   } = useGameStore();
   const { dice } = useDiceStore();
-  const { rewardPoints, addRewardPoints } = useShipStore();
+  const { rewardPoints } = useShipStore();
+  const { config } = useConfigStore();
   const [showResultModal, setShowResultModal] = useState(false);
 
   useEffect(() => {
@@ -154,6 +158,21 @@ export const BattlePage: React.FC = () => {
             <span className="ml-2 text-lg font-display font-bold text-neon-yellow">
               {currentDifficulty}
             </span>
+          </div>
+          <div className="glass-panel px-4 py-2 rounded-lg">
+            <span className="text-gray-400 text-sm">热量状态</span>
+            {(() => {
+              const maxTemp = Math.max(...battleState.player.cabins.map(c => c.temperature));
+              const riskLevel = getHeatRiskLevel(maxTemp, config);
+              const riskText = riskLevel === 'safe' ? '正常' : 
+                              riskLevel === 'warning' ? '注意' :
+                              riskLevel === 'danger' ? '警告' : '危险';
+              return (
+                <span className={`ml-2 text-lg font-display font-bold ${getHeatRiskColor(riskLevel)}`}>
+                  {riskText} ({maxTemp}°)
+                </span>
+              );
+            })()}
           </div>
         </div>
 

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { 
   BattleState, BattleRecord, BattleLogEntry, 
-  Enemy, ReplayData, ReplayAction
+  Enemy, ReplayData, ReplayAction, CabinType, HeatTransfer
 } from '../types';
 import { getRandomEnemy, generateEnemyIntent } from '../data/enemies';
 import { useShipStore } from './useShipStore';
@@ -12,6 +12,8 @@ import {
   executeEnemyIntent, 
   checkBattleEnd,
   calculateReward,
+  useCoolant as useCoolantUtil,
+  createLog,
 } from '../utils/battle';
 import { addBattleRecord, loadBattleHistory, updateStats } from '../utils/storage';
 import { unassignAllDice } from '../utils/dice';
@@ -24,12 +26,14 @@ interface GameState {
   replayIndex: number;
   isReplaying: boolean;
   replaySpeed: number;
+  lastHeatTransfers: HeatTransfer[];
   
   startBattle: () => void;
   confirmTurn: () => void;
   fleeBattle: () => void;
   endBattle: (result: 'victory' | 'defeat' | 'fled') => void;
   addLog: (log: BattleLogEntry) => void;
+  useCoolant: (cabinType: CabinType) => void;
   loadHistory: () => void;
   startReplay: (recordId: string) => void;
   nextReplayStep: () => void;
@@ -48,6 +52,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   replayIndex: -1,
   isReplaying: false,
   replaySpeed: 1,
+  lastHeatTransfers: [],
   
   startBattle: () => {
     const { currentDifficulty } = get();
@@ -59,7 +64,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     player.hp = player.maxHp;
     player.shield = player.maxShield;
     player.energy = player.maxEnergy;
-    player.cabins = player.cabins.map(c => ({ ...c, damaged: false, cooldown: 0 }));
+    player.cabins = player.cabins.map(c => ({ ...c, damaged: false, cooldown: 0, temperature: 0, coolant: c.maxCoolant }));
     
     const enemy = getRandomEnemy(currentDifficulty);
     
@@ -288,6 +293,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({ 
       battleState: newState,
       replayData: newReplayData,
+      lastHeatTransfers: playerResult.heatTransfers,
     });
     
     const newStats = {
@@ -376,6 +382,41 @@ export const useGameStore = create<GameState>((set, get) => ({
         logs: [...battleState.logs, log],
       },
     });
+  },
+  
+  useCoolant: (cabinType) => {
+    const { battleState, isReplaying } = get();
+    if (!battleState || battleState.phase !== 'player' || isReplaying) return;
+    
+    const config = useConfigStore.getState().config;
+    const cabin = battleState.player.cabins.find(c => c.type === cabinType);
+    if (!cabin) return;
+    
+    const result = useCoolantUtil(cabin, config);
+    if (result.cooled) {
+      const newCabins = battleState.player.cabins.map(c => 
+        c.type === cabinType ? result.updatedCabin : c
+      );
+      
+      const log = createLog(
+        'player',
+        'effect',
+        result.message,
+        config.coolantCoolingAmount,
+        battleState.turn
+      );
+      
+      set({
+        battleState: {
+          ...battleState,
+          player: {
+            ...battleState.player,
+            cabins: newCabins,
+          },
+          logs: [...battleState.logs, log],
+        },
+      });
+    }
   },
   
   loadHistory: () => {

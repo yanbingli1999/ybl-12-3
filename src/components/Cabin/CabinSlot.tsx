@@ -1,7 +1,8 @@
 import React from 'react';
-import { Flame, AlertTriangle } from 'lucide-react';
-import type { Cabin, Die, CabinType } from '../../types';
+import { Flame, AlertTriangle, Snowflake, ArrowRight } from 'lucide-react';
+import type { Cabin, Die, CabinType, HeatTransfer } from '../../types';
 import { useConfigStore } from '../../store/useConfigStore';
+import { getCabinHeatStatus, getHeatRiskColor, getHeatRiskBgColor } from '../../utils/battle';
 
 interface CabinSlotProps {
   cabin: Cabin;
@@ -9,7 +10,10 @@ interface CabinSlotProps {
   totalPoints: number;
   onDrop: (cabinType: CabinType, dieId: string) => void;
   onRemoveDie: (dieId: string) => void;
+  onUseCoolant?: (cabinType: CabinType) => void;
+  heatTransfers?: HeatTransfer[];
   disabled?: boolean;
+  canUseCoolant?: boolean;
 }
 
 const cabinColors: Record<CabinType, { bg: string; border: string; text: string; icon: string }> = {
@@ -20,18 +24,33 @@ const cabinColors: Record<CabinType, { bg: string; border: string; text: string;
   scanner: { bg: 'bg-neon-yellow/10', border: 'border-neon-yellow', text: 'text-neon-yellow', icon: '📡' },
 };
 
+const cabinNameMap: Record<CabinType, string> = {
+  engine: '引擎舱',
+  shield: '护盾舱',
+  weapon: '武器舱',
+  repair: '维修舱',
+  scanner: '扫描舱',
+};
+
 export const CabinSlot: React.FC<CabinSlotProps> = ({
   cabin,
   assignedDice,
   totalPoints,
   onDrop,
   onRemoveDie,
+  onUseCoolant,
+  heatTransfers = [],
   disabled,
+  canUseCoolant = false,
 }) => {
   const colors = cabinColors[cabin.type];
   const { config } = useConfigStore();
   const isOverheated = totalPoints > config.overheatThreshold;
   const isDamaged = cabin.damaged;
+  const heatStatus = getCabinHeatStatus(cabin, config);
+  
+  const incomingTransfers = heatTransfers.filter(t => t.to === cabin.type);
+  const outgoingTransfers = heatTransfers.filter(t => t.from === cabin.type);
 
   const handleDragOver = (e: React.DragEvent) => {
     if (!disabled && !isDamaged) {
@@ -47,6 +66,13 @@ export const CabinSlot: React.FC<CabinSlotProps> = ({
     const dieId = e.dataTransfer.getData('dieId');
     if (dieId) {
       onDrop(cabin.type, dieId);
+    }
+  };
+
+  const handleUseCoolant = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onUseCoolant && heatStatus.canUseCoolant && canUseCoolant) {
+      onUseCoolant(cabin.type);
     }
   };
 
@@ -75,20 +101,68 @@ export const CabinSlot: React.FC<CabinSlotProps> = ({
           </div>
         </div>
         
-        {isDamaged && (
-          <div className="flex items-center gap-1 text-neon-red">
-            <AlertTriangle className="w-4 h-4 animate-pulse" />
-            <span className="text-xs">损坏中 ({cabin.cooldown})</span>
-          </div>
-        )}
-        
-        {isOverheated && (
-          <div className="flex items-center gap-1 text-neon-red animate-pulse">
-            <Flame className="w-4 h-4" />
-            <span className="text-xs">过热!</span>
-          </div>
-        )}
+        <div className="flex flex-col items-end gap-1">
+          {isDamaged && (
+            <div className="flex items-center gap-1 text-neon-red">
+              <AlertTriangle className="w-4 h-4 animate-pulse" />
+              <span className="text-xs">损坏中 ({cabin.cooldown})</span>
+            </div>
+          )}
+          
+          {isOverheated && (
+            <div className="flex items-center gap-1 text-neon-red animate-pulse">
+              <Flame className="w-4 h-4" />
+              <span className="text-xs">过热!</span>
+            </div>
+          )}
+          
+          {!isDamaged && (
+            <div className={`flex items-center gap-1 ${getHeatRiskColor(heatStatus.riskLevel)}`}>
+              <Flame className="w-4 h-4" />
+              <span className="text-xs font-bold">{heatStatus.riskText}</span>
+            </div>
+          )}
+        </div>
       </div>
+
+      <div className="mb-2">
+        <div className="flex justify-between text-xs text-gray-400 mb-1">
+          <span>温度: {cabin.temperature}/{cabin.maxTemperature}°</span>
+          <div className="flex items-center gap-1">
+            <Snowflake className="w-3 h-3" />
+            <span>{cabin.coolant}/{cabin.maxCoolant}</span>
+          </div>
+        </div>
+        <div className="stat-bar">
+          <div
+            className={`stat-bar-fill ${getHeatRiskBgColor(heatStatus.riskLevel)}`}
+            style={{ width: `${heatStatus.tempPercent}%` }}
+          />
+        </div>
+      </div>
+
+      {!isDamaged && (incomingTransfers.length > 0 || outgoingTransfers.length > 0) && (
+        <div className="mb-2 text-xs">
+          {incomingTransfers.map((t, i) => (
+            <div key={`in-${i}`} className="text-neon-cyan flex items-center gap-1">
+              <ArrowRight className="w-3 h-3 rotate-180" />
+              来自 {cabinNameMap[t.from]}: +{t.amount}
+            </div>
+          ))}
+          {outgoingTransfers.map((t, i) => (
+            <div key={`out-${i}`} className="text-neon-orange flex items-center gap-1">
+              <ArrowRight className="w-3 h-3" />
+              传向 {cabinNameMap[t.to]}: -{t.amount}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!isDamaged && (
+        <div className="mb-2 text-xs text-gray-400">
+          相邻: {cabin.neighbors.map(n => cabinNameMap[n]).join(', ')}
+        </div>
+      )}
 
       {assignedDice.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-2">
@@ -109,16 +183,29 @@ export const CabinSlot: React.FC<CabinSlotProps> = ({
         </div>
       )}
 
-      {totalPoints > 0 && (
-        <div className={`text-right font-display font-bold ${isOverheated ? 'text-neon-red' : colors.text}`}>
-          总点数: {totalPoints}
-          {isOverheated && (
-            <span className="text-xs ml-2 text-neon-red">
-              (超过阈值 {config.overheatThreshold})
-            </span>
-          )}
-        </div>
-      )}
+      <div className="flex items-center justify-between">
+        {totalPoints > 0 && (
+          <div className={`text-right font-display font-bold ${isOverheated ? 'text-neon-red' : colors.text}`}>
+            总点数: {totalPoints}
+            {isOverheated && (
+              <span className="text-xs ml-2 text-neon-red">
+                (超过阈值 {config.overheatThreshold})
+              </span>
+            )}
+          </div>
+        )}
+        
+        {onUseCoolant && heatStatus.canUseCoolant && canUseCoolant && !isDamaged && (
+          <button
+            onClick={handleUseCoolant}
+            className="px-2 py-1 bg-neon-cyan/20 border border-neon-cyan text-neon-cyan text-xs rounded flex items-center gap-1 hover:bg-neon-cyan/30 transition-colors"
+            title="使用冷却剂降温"
+          >
+            <Snowflake className="w-3 h-3" />
+            冷却
+          </button>
+        )}
+      </div>
 
       {isDamaged && (
         <div className="absolute inset-0 bg-neon-red/10 rounded-lg pointer-events-none overflow-hidden">

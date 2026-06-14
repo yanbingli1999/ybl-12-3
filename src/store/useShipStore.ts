@@ -137,6 +137,7 @@ export const useShipStore = create<ShipState>((set, get) => ({
           ...cabin,
           level: 1 + cabinUpgrade.currentLevel,
           bonus: cabinUpgrade.currentLevel * cabinUpgrade.effect,
+          maxCoolant: 5 + cabinUpgrade.currentLevel,
         };
       }
       return cabin;

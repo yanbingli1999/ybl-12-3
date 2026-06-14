@@ -51,8 +51,22 @@ export function saveSaveData(data: GameSaveData): void {
 function validateSaveData(data: GameSaveData): GameSaveData {
   const defaults = createDefaultSaveData();
   
+  const validatedCabins = defaults.ship.cabins.map((defaultCabin, index) => {
+    const savedCabin = data.ship.cabins?.[index];
+    if (!savedCabin) return defaultCabin;
+    return {
+      ...defaultCabin,
+      ...savedCabin,
+      temperature: typeof savedCabin.temperature === 'number' ? savedCabin.temperature : 0,
+      maxTemperature: typeof savedCabin.maxTemperature === 'number' ? savedCabin.maxTemperature : 100,
+      coolant: typeof savedCabin.coolant === 'number' ? savedCabin.coolant : 3,
+      maxCoolant: typeof savedCabin.maxCoolant === 'number' ? savedCabin.maxCoolant : 5,
+      neighbors: Array.isArray(savedCabin.neighbors) ? savedCabin.neighbors : defaultCabin.neighbors,
+    };
+  });
+  
   return {
-    ship: { ...defaults.ship, ...data.ship, cabins: data.ship.cabins || defaults.ship.cabins },
+    ship: { ...defaults.ship, ...data.ship, cabins: validatedCabins },
     upgrades: data.upgrades && data.upgrades.length > 0 ? data.upgrades : defaults.upgrades,
     config: { ...defaults.config, ...data.config },
     battleHistory: data.battleHistory || [],

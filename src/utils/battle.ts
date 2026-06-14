@@ -1,6 +1,6 @@
 import type { 
   Ship, Enemy, Die, CabinType, DamageResult, BattleLogEntry,
-  GameConfig, AllocationResult, EnemyIntent
+  GameConfig, AllocationResult, EnemyIntent, Cabin, HeatRiskLevel, HeatTransfer
 } from '../types';
 
 export function calculateDamage(
@@ -41,18 +41,23 @@ export function calculateDamage(
 export function applyShieldAbsorption(
   damageResult: DamageResult,
   currentShield: number,
-  config: GameConfig
-): { damage: number; shieldAbsorbed: number; remainingShield: number } {
+  config: GameConfig,
+  shieldCabin?: Cabin
+): { damage: number; shieldAbsorbed: number; remainingShield: number; absorptionModifier: number } {
   if (damageResult.isMiss || damageResult.damage <= 0) {
     return {
       damage: 0,
       shieldAbsorbed: 0,
       remainingShield: currentShield,
+      absorptionModifier: 1,
     };
   }
 
+  const absorptionModifier = getShieldAbsorptionModifier(shieldCabin, config);
+  const effectiveAbsorptionRate = config.shieldAbsorptionRate * absorptionModifier;
+
   const absorptionAmount = Math.min(
-    damageResult.damage * config.shieldAbsorptionRate,
+    damageResult.damage * effectiveAbsorptionRate,
     currentShield
   );
   const remainingDamage = damageResult.damage - absorptionAmount;
@@ -62,6 +67,7 @@ export function applyShieldAbsorption(
     damage: Math.max(0, Math.floor(remainingDamage)),
     shieldAbsorbed: Math.floor(absorptionAmount),
     remainingShield: Math.max(0, remainingShield),
+    absorptionModifier,
   };
 }
 
@@ -175,7 +181,7 @@ export function executeEnemyIntent(
   config: GameConfig
 ): { 
   damageResult: DamageResult; 
-  shieldResult: { damage: number; shieldAbsorbed: number; remainingShield: number };
+  shieldResult: { damage: number; shieldAbsorbed: number; remainingShield: number; absorptionModifier: number };
   logs: BattleLogEntry[];
   newPlayerHp: number;
   newPlayerShield: number;
@@ -220,10 +226,24 @@ export function executeEnemyIntent(
       break;
   }
 
+  const engineCabin = player.cabins.find(c => c.type === 'engine');
+  const evasionModifier = getEngineEvasionModifier(engineCabin, config);
+  const effectiveEvasion = applyEvasionVariance(player.evasion, evasionModifier.variance);
+
+  if (evasionModifier.variance > 0) {
+    logs.push(createLog(
+      'system',
+      'effect',
+      `引擎舱高温导致闪避波动！实际闪避率：${(effectiveEvasion * 100).toFixed(0)}%`,
+      Math.round(effectiveEvasion * 100),
+      1
+    ));
+  }
+
   const damageResult = calculateDamage(
     baseDamage,
     0.1,
-    player.evasion,
+    effectiveEvasion,
     player.defense,
     config,
     guaranteedCrit
@@ -233,10 +253,21 @@ export function executeEnemyIntent(
     logs.push(createLog('player', 'miss', '成功闪避！', undefined, 1));
   }
 
-  const shieldResult = applyShieldAbsorption(damageResult, player.shield, config);
+  const shieldCabin = player.cabins.find(c => c.type === 'shield');
+  const shieldResult = applyShieldAbsorption(damageResult, player.shield, config, shieldCabin);
   
   if (shieldResult.shieldAbsorbed > 0) {
     logs.push(createLog('player', 'shield', `护盾吸收了 ${shieldResult.shieldAbsorbed} 点伤害`, shieldResult.shieldAbsorbed, 1));
+  }
+
+  if (shieldResult.absorptionModifier < 1) {
+    logs.push(createLog(
+      'system',
+      'effect',
+      `护盾舱高温导致吸收率下降至 ${(shieldResult.absorptionModifier * 100).toFixed(0)}%`,
+      Math.round(shieldResult.absorptionModifier * 100),
+      1
+    ));
   }
 
   if (damageResult.isCrit && !damageResult.isMiss) {
@@ -274,6 +305,7 @@ export function executePlayerActions(
   totalShieldGained: number;
   damagedCabins: CabinType[];
   energyUsed: number;
+  heatTransfers: HeatTransfer[];
 } {
   const logs: BattleLogEntry[] = [];
   let newPlayer = { ...player };
@@ -304,8 +336,13 @@ export function executePlayerActions(
 
   const allocations = getAllocations(dice);
 
+  const heatResult = processHeatSystem(newPlayer.cabins, allocations, config);
+  newPlayer.cabins = heatResult.updatedCabins;
+  logs.push(...heatResult.heatLogs);
+  const heatTransfers = heatResult.transfers;
+
   for (const allocation of allocations) {
-    const cabin = player.cabins.find(c => c.type === allocation.cabinType);
+    const cabin = newPlayer.cabins.find(c => c.type === allocation.cabinType);
     if (!cabin) continue;
 
     if (cabin.damaged) {
@@ -336,10 +373,25 @@ export function executePlayerActions(
           const sixCount = weaponDice.filter(d => d.value === 6).length;
           const bonusCritRate = sixCount * config.critBonusRate;
           const guaranteedCrit = sixCount >= 2;
-          const totalCritRate = Math.min(0.9, player.critRate + bonusCritRate);
+          
+          const weaponCabin = newPlayer.cabins.find(c => c.type === 'weapon');
+          const heatCritBonus = getWeaponCritModifier(weaponCabin, config);
+          const heatDamageChance = getWeaponDamageChance(weaponCabin, config);
+          
+          if (heatCritBonus > 0) {
+            logs.push(createLog(
+              'system',
+              'effect',
+              `武器舱高温提供额外暴击率 +${(heatCritBonus * 100).toFixed(0)}%`,
+              Math.round(heatCritBonus * 100),
+              1
+            ));
+          }
+          
+          const totalCritRate = Math.min(0.9, player.critRate + bonusCritRate + heatCritBonus);
 
           // #region debug-point H2:six-crit-calc
-          fetch("http://127.0.0.1:7777/event",{method:"POST",body:JSON.stringify({sessionId:"battle-mechanics-bugs",runId:"pre-fix",hypothesisId:"H2",location:"battle.ts:324",msg:"[DEBUG] Six-dice crit rate calculation",data:{weaponDice:weaponDice.map(d=>({id:d.id,value:d.value})),sixCount,bonusCritRate,baseCritRate:player.critRate,totalCritRate,critBonusRate:config.critBonusRate},ts:Date.now()})}).catch(()=>{});
+          fetch("http://127.0.0.1:7777/event",{method:"POST",body:JSON.stringify({sessionId:"battle-mechanics-bugs",runId:"pre-fix",hypothesisId:"H2",location:"battle.ts:324",msg:"[DEBUG] Six-dice crit rate calculation",data:{weaponDice:weaponDice.map(d=>({id:d.id,value:d.value})),sixCount,bonusCritRate,baseCritRate:player.critRate,totalCritRate,critBonusRate:config.critBonusRate,heatCritBonus},ts:Date.now()})}).catch(()=>{});
           // #endregion
 
           const damageResult = calculateDamage(
@@ -375,6 +427,25 @@ export function executePlayerActions(
             if (shieldAbsorption.damage > 0) {
               logs.push(createLog('enemy', 'damage', `敌方受到 ${shieldAbsorption.damage} 点伤害`, shieldAbsorption.damage, 1));
             }
+
+            if (heatDamageChance > 0 && Math.random() < heatDamageChance && weaponCabin) {
+              const cabinIndex = newPlayer.cabins.findIndex(c => c.type === 'weapon');
+              if (cabinIndex !== -1) {
+                newPlayer.cabins[cabinIndex] = {
+                  ...newPlayer.cabins[cabinIndex],
+                  damaged: true,
+                  cooldown: config.repairCooldown,
+                };
+                damagedCabins.push('weapon');
+                logs.push(createLog(
+                  'system',
+                  'effect',
+                  `武器舱因高温过载损坏！需要 ${config.repairCooldown} 回合冷却`,
+                  undefined,
+                  1
+                ));
+              }
+            }
           }
         }
         break;
@@ -399,6 +470,9 @@ export function executePlayerActions(
             }
             return c;
           });
+
+          newPlayer.cabins = rechargeCoolant(newPlayer.cabins, 1);
+          logs.push(createLog('system', 'effect', '冷却剂已补充 +1', 1, 1));
         }
         break;
       }
@@ -421,7 +495,7 @@ export function executePlayerActions(
   newEnemy.evasion = Math.max(0, enemy.evasion - enemyEvasionReduction);
 
   newPlayer.cabins = newPlayer.cabins.map(c => {
-    if (damagedCabins.includes(c.type)) {
+    if (damagedCabins.includes(c.type) && !c.damaged) {
       return { ...c, damaged: true, cooldown: config.repairCooldown };
     }
     if (c.cooldown > 0 && c.damaged) {
@@ -445,10 +519,11 @@ export function executePlayerActions(
     totalShieldGained,
     damagedCabins,
     energyUsed: actualEnergyCost,
+    heatTransfers,
   };
 }
 
-function createLog(
+export function createLog(
   source: 'player' | 'enemy' | 'system',
   type: BattleLogEntry['type'],
   message: string,
@@ -494,4 +569,304 @@ export function getIntentColor(intent: EnemyIntent): string {
     case 'repair': return 'text-neon-green';
     default: return 'text-gray-400';
   }
+}
+
+export function getHeatRiskLevel(temperature: number, config: GameConfig): HeatRiskLevel {
+  if (temperature >= config.heatCriticalThreshold) return 'critical';
+  if (temperature >= config.heatDangerThreshold) return 'danger';
+  if (temperature >= config.heatWarningThreshold) return 'warning';
+  return 'safe';
+}
+
+export function getHeatRiskColor(level: HeatRiskLevel): string {
+  switch (level) {
+    case 'safe': return 'text-neon-green';
+    case 'warning': return 'text-neon-yellow';
+    case 'danger': return 'text-neon-orange';
+    case 'critical': return 'text-neon-red';
+  }
+}
+
+export function getHeatRiskBgColor(level: HeatRiskLevel): string {
+  switch (level) {
+    case 'safe': return 'bg-neon-green';
+    case 'warning': return 'bg-neon-yellow';
+    case 'danger': return 'bg-neon-orange';
+    case 'critical': return 'bg-neon-red';
+  }
+}
+
+export function generateHeat(
+  cabin: Cabin,
+  totalPoints: number,
+  config: GameConfig
+): number {
+  const heatGenerated = totalPoints * config.baseHeatPerPoint;
+  return Math.min(cabin.maxTemperature, cabin.temperature + heatGenerated);
+}
+
+export function calculateHeatTransfers(
+  cabins: Cabin[],
+  config: GameConfig
+): HeatTransfer[] {
+  const transfers: HeatTransfer[] = [];
+  
+  for (const cabin of cabins) {
+    if (cabin.temperature >= config.heatConductionThreshold) {
+      const excessHeat = cabin.temperature - config.heatConductionThreshold;
+      const transferableHeat = excessHeat * config.heatConductionRate;
+      const neighbors = cabin.neighbors;
+      
+      if (neighbors.length > 0) {
+        const heatPerNeighbor = transferableHeat / neighbors.length;
+        
+        for (const neighborType of neighbors) {
+          const neighbor = cabins.find(c => c.type === neighborType);
+          if (neighbor && neighbor.temperature < cabin.temperature) {
+            const actualTransfer = Math.min(
+              heatPerNeighbor,
+              neighbor.maxTemperature - neighbor.temperature
+            );
+            if (actualTransfer > 0) {
+              transfers.push({
+                from: cabin.type,
+                to: neighborType,
+                amount: Math.floor(actualTransfer),
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  return transfers;
+}
+
+export function applyHeatTransfers(
+  cabins: Cabin[],
+  transfers: HeatTransfer[]
+): { updatedCabins: Cabin[]; transferLogs: string[] } {
+  const updatedCabins = cabins.map(c => ({ ...c }));
+  const transferLogs: string[] = [];
+  
+  for (const transfer of transfers) {
+    const fromCabin = updatedCabins.find(c => c.type === transfer.from);
+    const toCabin = updatedCabins.find(c => c.type === transfer.to);
+    
+    if (fromCabin && toCabin) {
+      const actualAmount = Math.min(
+        transfer.amount,
+        fromCabin.temperature,
+        toCabin.maxTemperature - toCabin.temperature
+      );
+      
+      if (actualAmount > 0) {
+        fromCabin.temperature = Math.max(0, fromCabin.temperature - actualAmount);
+        toCabin.temperature = Math.min(toCabin.maxTemperature, toCabin.temperature + actualAmount);
+        
+        transferLogs.push(`${fromCabin.name} → ${toCabin.name}: +${actualAmount}热量`);
+      }
+    }
+  }
+  
+  return { updatedCabins, transferLogs };
+}
+
+export function applyPassiveCooling(
+  cabins: Cabin[],
+  config: GameConfig
+): Cabin[] {
+  return cabins.map(cabin => ({
+    ...cabin,
+    temperature: Math.max(0, cabin.temperature - config.passiveCoolingRate),
+  }));
+}
+
+export function useCoolant(
+  cabin: Cabin,
+  config: GameConfig
+): { updatedCabin: Cabin; cooled: boolean; message: string } {
+  if (cabin.coolant <= 0) {
+    return { updatedCabin: cabin, cooled: false, message: '冷却剂不足' };
+  }
+  
+  const coolingAmount = config.coolantCoolingAmount;
+  const newTemp = Math.max(0, cabin.temperature - coolingAmount);
+  const actualCooling = cabin.temperature - newTemp;
+  
+  return {
+    updatedCabin: {
+      ...cabin,
+      temperature: newTemp,
+      coolant: cabin.coolant - 1,
+    },
+    cooled: true,
+    message: `${cabin.name}释放冷却剂，降温${actualCooling}度`,
+  };
+}
+
+export function rechargeCoolant(cabins: Cabin[], amount: number = 1): Cabin[] {
+  return cabins.map(cabin => ({
+    ...cabin,
+    coolant: Math.min(cabin.maxCoolant, cabin.coolant + amount),
+  }));
+}
+
+export function getShieldAbsorptionModifier(
+  shieldCabin: Cabin | undefined,
+  config: GameConfig
+): number {
+  if (!shieldCabin) return 1;
+  
+  const riskLevel = getHeatRiskLevel(shieldCabin.temperature, config);
+  if (riskLevel === 'critical') return 1 - config.shieldHighTempPenalty * 2;
+  if (riskLevel === 'danger') return 1 - config.shieldHighTempPenalty;
+  if (riskLevel === 'warning') return 1 - config.shieldHighTempPenalty * 0.5;
+  return 1;
+}
+
+export function getWeaponCritModifier(
+  weaponCabin: Cabin | undefined,
+  config: GameConfig
+): number {
+  if (!weaponCabin) return 0;
+  
+  const riskLevel = getHeatRiskLevel(weaponCabin.temperature, config);
+  if (riskLevel === 'critical') return config.weaponHighTempCritBonus * 2;
+  if (riskLevel === 'danger') return config.weaponHighTempCritBonus;
+  if (riskLevel === 'warning') return config.weaponHighTempCritBonus * 0.5;
+  return 0;
+}
+
+export function getWeaponDamageChance(
+  weaponCabin: Cabin | undefined,
+  config: GameConfig
+): number {
+  if (!weaponCabin) return 0;
+  
+  const riskLevel = getHeatRiskLevel(weaponCabin.temperature, config);
+  if (riskLevel === 'critical') return config.weaponHighTempDamageChance * 2;
+  if (riskLevel === 'danger') return config.weaponHighTempDamageChance;
+  if (riskLevel === 'warning') return config.weaponHighTempDamageChance * 0.5;
+  return 0;
+}
+
+export function getEngineEvasionModifier(
+  engineCabin: Cabin | undefined,
+  config: GameConfig
+): { bonus: number; variance: number } {
+  if (!engineCabin) return { bonus: 0, variance: 0 };
+  
+  const riskLevel = getHeatRiskLevel(engineCabin.temperature, config);
+  let variance = 0;
+  
+  if (riskLevel === 'critical') variance = config.engineHighTempEvasionVariance * 2;
+  else if (riskLevel === 'danger') variance = config.engineHighTempEvasionVariance;
+  else if (riskLevel === 'warning') variance = config.engineHighTempEvasionVariance * 0.5;
+  
+  return { bonus: 0, variance };
+}
+
+export function applyEvasionVariance(
+  baseEvasion: number,
+  variance: number
+): number {
+  if (variance <= 0) return baseEvasion;
+  
+  const randomFactor = (Math.random() * 2 - 1) * variance;
+  return Math.max(0, Math.min(0.9, baseEvasion + randomFactor));
+}
+
+export function processHeatSystem(
+  cabins: Cabin[],
+  allocations: AllocationResult[],
+  config: GameConfig
+): {
+  updatedCabins: Cabin[];
+  heatLogs: BattleLogEntry[];
+  transfers: HeatTransfer[];
+} {
+  const heatLogs: BattleLogEntry[] = [];
+  let updatedCabins = cabins.map(c => ({ ...c }));
+  
+  for (const allocation of allocations) {
+    const cabinIndex = updatedCabins.findIndex(c => c.type === allocation.cabinType);
+    if (cabinIndex === -1) continue;
+    
+    const cabin = updatedCabins[cabinIndex];
+    if (cabin.damaged) continue;
+    
+    const newTemp = generateHeat(cabin, allocation.totalPoints, config);
+    const heatGained = newTemp - cabin.temperature;
+    
+    if (heatGained > 0) {
+      updatedCabins[cabinIndex] = { ...cabin, temperature: newTemp };
+      
+      const riskLevel = getHeatRiskLevel(newTemp, config);
+      if (riskLevel === 'danger' || riskLevel === 'critical') {
+        heatLogs.push(createLog(
+          'system',
+          'effect',
+          `${cabin.name}温度升至${newTemp}度！风险等级：${riskLevel === 'critical' ? '危险' : '警告'}`,
+          newTemp,
+          1
+        ));
+      }
+    }
+  }
+  
+  const transfers = calculateHeatTransfers(updatedCabins, config);
+  const { updatedCabins: cabinsAfterTransfer, transferLogs } = applyHeatTransfers(updatedCabins, transfers);
+  updatedCabins = cabinsAfterTransfer;
+  
+  for (const log of transferLogs) {
+    heatLogs.push(createLog('system', 'effect', `热量传导: ${log}`, undefined, 1));
+  }
+  
+  updatedCabins = applyPassiveCooling(updatedCabins, config);
+  
+  for (const cabin of updatedCabins) {
+    if (cabin.temperature >= cabin.maxTemperature && !cabin.damaged) {
+      const cabinIndex = updatedCabins.findIndex(c => c.type === cabin.type);
+      updatedCabins[cabinIndex] = {
+        ...cabin,
+        damaged: true,
+        cooldown: config.repairCooldown,
+        temperature: Math.floor(cabin.maxTemperature * 0.7),
+      };
+      heatLogs.push(createLog(
+        'system',
+        'effect',
+        `${cabin.name}因温度过高损坏！需要${config.repairCooldown}回合冷却`,
+        undefined,
+        1
+      ));
+    }
+  }
+  
+  return { updatedCabins, heatLogs, transfers };
+}
+
+export function getCabinHeatStatus(
+  cabin: Cabin,
+  config: GameConfig
+): {
+  riskLevel: HeatRiskLevel;
+  riskText: string;
+  tempPercent: number;
+  canUseCoolant: boolean;
+} {
+  const riskLevel = getHeatRiskLevel(cabin.temperature, config);
+  const tempPercent = Math.round((cabin.temperature / cabin.maxTemperature) * 100);
+  const canUseCoolant = cabin.coolant > 0 && cabin.temperature > 0 && !cabin.damaged;
+  
+  let riskText = '安全';
+  switch (riskLevel) {
+    case 'warning': riskText = '注意'; break;
+    case 'danger': riskText = '警告'; break;
+    case 'critical': riskText = '危险'; break;
+  }
+  
+  return { riskLevel, riskText, tempPercent, canUseCoolant };
 }
