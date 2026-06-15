@@ -12,7 +12,10 @@ interface CabinAreaProps {
 export const CabinArea: React.FC<CabinAreaProps> = ({ disabled }) => {
   const { dice, assignDie } = useDiceStore();
   const { ship } = useShipStore();
-  const { lastHeatTransfers, useCoolant, battleState, isReplaying } = useGameStore();
+  const { useCoolant, battleState, isReplaying } = useGameStore();
+  const lastHeatTransfers = battleState?.lastHeatTransfers || [];
+  
+  const displayCabins = battleState?.player.cabins || ship.cabins;
 
   const handleDrop = (cabinType: CabinType, dieId: string) => {
     assignDie(dieId, cabinType);
@@ -22,8 +25,8 @@ export const CabinArea: React.FC<CabinAreaProps> = ({ disabled }) => {
     assignDie(dieId, null);
   };
 
-  const handleUseCoolant = (cabinType: CabinType) => {
-    useCoolant(cabinType);
+  const handleUseCoolant = () => {
+    useCoolant();
   };
 
   const getDiceForCabin = (cabinType: CabinType) => {
@@ -37,8 +40,8 @@ export const CabinArea: React.FC<CabinAreaProps> = ({ disabled }) => {
   const cabinOrder: CabinType[] = ['engine', 'shield', 'weapon', 'repair', 'scanner'];
   const canUseCoolant = battleState?.phase === 'player' && !isReplaying;
 
-  const totalHeat = ship.cabins.reduce((sum, c) => sum + c.temperature, 0);
-  const avgHeat = Math.round(totalHeat / ship.cabins.length);
+  const totalHeat = displayCabins.reduce((sum, c) => sum + c.temperature, 0);
+  const avgHeat = Math.round(totalHeat / displayCabins.length);
 
   return (
     <div className="glass-panel neon-border p-6 rounded-xl">
@@ -51,7 +54,7 @@ export const CabinArea: React.FC<CabinAreaProps> = ({ disabled }) => {
       
       <div className="space-y-3">
         {cabinOrder.map(cabinType => {
-          const cabin = ship.cabins.find(c => c.type === cabinType);
+          const cabin = displayCabins.find(c => c.type === cabinType);
           if (!cabin) return null;
           
           return (
@@ -64,6 +67,7 @@ export const CabinArea: React.FC<CabinAreaProps> = ({ disabled }) => {
               onRemoveDie={handleRemoveDie}
               onUseCoolant={handleUseCoolant}
               heatTransfers={lastHeatTransfers}
+              allCabins={displayCabins}
               disabled={disabled}
               canUseCoolant={canUseCoolant}
             />

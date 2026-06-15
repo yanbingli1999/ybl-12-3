@@ -26,14 +26,13 @@ interface GameState {
   replayIndex: number;
   isReplaying: boolean;
   replaySpeed: number;
-  lastHeatTransfers: HeatTransfer[];
   
   startBattle: () => void;
   confirmTurn: () => void;
   fleeBattle: () => void;
   endBattle: (result: 'victory' | 'defeat' | 'fled') => void;
   addLog: (log: BattleLogEntry) => void;
-  useCoolant: (cabinType: CabinType) => void;
+  useCoolant: () => void;
   loadHistory: () => void;
   startReplay: (recordId: string) => void;
   nextReplayStep: () => void;
@@ -52,7 +51,6 @@ export const useGameStore = create<GameState>((set, get) => ({
   replayIndex: -1,
   isReplaying: false,
   replaySpeed: 1,
-  lastHeatTransfers: [],
   
   startBattle: () => {
     const { currentDifficulty } = get();
@@ -85,6 +83,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       result: 'ongoing',
       startTime: Date.now(),
       rewardPoints: 0,
+      lastHeatTransfers: [],
     };
     
     const replayData: ReplayData = {
@@ -131,6 +130,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       player: playerResult.newPlayer,
       enemy: playerResult.newEnemy,
       logs: [...battleState.logs, ...playerResult.logs.map(l => ({ ...l, turn: battleState.turn }))],
+      lastHeatTransfers: playerResult.heatTransfers,
     };
     
     const result = checkBattleEnd(newState.player, newState.enemy);
@@ -293,7 +293,6 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({ 
       battleState: newState,
       replayData: newReplayData,
-      lastHeatTransfers: playerResult.heatTransfers,
     });
     
     const newStats = {
@@ -384,20 +383,24 @@ export const useGameStore = create<GameState>((set, get) => ({
     });
   },
   
-  useCoolant: (cabinType) => {
+  useCoolant: () => {
     const { battleState, isReplaying } = get();
     if (!battleState || battleState.phase !== 'player' || isReplaying) return;
     
     const config = useConfigStore.getState().config;
-    const cabin = battleState.player.cabins.find(c => c.type === cabinType);
-    if (!cabin) return;
+    const repairCabin = battleState.player.cabins.find(c => c.type === 'repair');
+    if (!repairCabin || repairCabin.damaged || repairCabin.coolant <= 0) return;
     
-    const result = useCoolantUtil(cabin, config);
+    const hotCabins = battleState.player.cabins
+      .filter(c => !c.damaged && c.temperature > 0)
+      .sort((a, b) => b.temperature - a.temperature);
+    
+    if (hotCabins.length === 0) return;
+    
+    const targetCabin = hotCabins[0];
+    const result = useCoolantUtil(battleState.player.cabins, targetCabin.type, config);
+    
     if (result.cooled) {
-      const newCabins = battleState.player.cabins.map(c => 
-        c.type === cabinType ? result.updatedCabin : c
-      );
-      
       const log = createLog(
         'player',
         'effect',
@@ -411,7 +414,7 @@ export const useGameStore = create<GameState>((set, get) => ({
           ...battleState,
           player: {
             ...battleState.player,
-            cabins: newCabins,
+            cabins: result.updatedCabins,
           },
           logs: [...battleState.logs, log],
         },

@@ -24,7 +24,6 @@ export const BattlePage: React.FC = () => {
     resetBattle,
     setDifficulty,
     isReplaying,
-    lastHeatTransfers,
   } = useGameStore();
   const { dice } = useDiceStore();
   const { rewardPoints } = useShipStore();

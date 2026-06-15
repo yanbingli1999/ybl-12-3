@@ -112,6 +112,7 @@ export interface BattleState {
   startTime: number;
   endTime?: number;
   rewardPoints: number;
+  lastHeatTransfers: HeatTransfer[];
 }
 
 export interface GameConfig {

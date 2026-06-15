@@ -684,33 +684,52 @@ export function applyPassiveCooling(
 }
 
 export function useCoolant(
-  cabin: Cabin,
+  cabins: Cabin[],
+  targetCabinType: CabinType,
   config: GameConfig
-): { updatedCabin: Cabin; cooled: boolean; message: string } {
-  if (cabin.coolant <= 0) {
-    return { updatedCabin: cabin, cooled: false, message: '冷却剂不足' };
+): { updatedCabins: Cabin[]; cooled: boolean; message: string } {
+  const repairCabin = cabins.find(c => c.type === 'repair');
+  const targetCabin = cabins.find(c => c.type === targetCabinType);
+  
+  if (!repairCabin || repairCabin.coolant <= 0) {
+    return { updatedCabins: cabins, cooled: false, message: '冷却剂不足' };
+  }
+  
+  if (!targetCabin || targetCabin.damaged) {
+    return { updatedCabins: cabins, cooled: false, message: '目标舱室无法冷却' };
   }
   
   const coolingAmount = config.coolantCoolingAmount;
-  const newTemp = Math.max(0, cabin.temperature - coolingAmount);
-  const actualCooling = cabin.temperature - newTemp;
+  const newTemp = Math.max(0, targetCabin.temperature - coolingAmount);
+  const actualCooling = targetCabin.temperature - newTemp;
+  
+  const updatedCabins = cabins.map(c => {
+    if (c.type === 'repair') {
+      return { ...c, coolant: c.coolant - 1 };
+    }
+    if (c.type === targetCabinType) {
+      return { ...c, temperature: newTemp };
+    }
+    return c;
+  });
   
   return {
-    updatedCabin: {
-      ...cabin,
-      temperature: newTemp,
-      coolant: cabin.coolant - 1,
-    },
+    updatedCabins,
     cooled: true,
-    message: `${cabin.name}释放冷却剂，降温${actualCooling}度`,
+    message: `维修舱释放冷却剂，${targetCabin.name}降温${actualCooling}度`,
   };
 }
 
 export function rechargeCoolant(cabins: Cabin[], amount: number = 1): Cabin[] {
-  return cabins.map(cabin => ({
-    ...cabin,
-    coolant: Math.min(cabin.maxCoolant, cabin.coolant + amount),
-  }));
+  return cabins.map(cabin => {
+    if (cabin.type === 'repair') {
+      return {
+        ...cabin,
+        coolant: Math.min(cabin.maxCoolant, cabin.coolant + amount),
+      };
+    }
+    return cabin;
+  });
 }
 
 export function getShieldAbsorptionModifier(
@@ -850,16 +869,28 @@ export function processHeatSystem(
 
 export function getCabinHeatStatus(
   cabin: Cabin,
-  config: GameConfig
+  config: GameConfig,
+  allCabins?: Cabin[]
 ): {
   riskLevel: HeatRiskLevel;
   riskText: string;
   tempPercent: number;
   canUseCoolant: boolean;
+  coolantAvailable: number;
 } {
   const riskLevel = getHeatRiskLevel(cabin.temperature, config);
   const tempPercent = Math.round((cabin.temperature / cabin.maxTemperature) * 100);
-  const canUseCoolant = cabin.coolant > 0 && cabin.temperature > 0 && !cabin.damaged;
+  
+  let coolantAvailable = 0;
+  if (allCabins) {
+    const repairCabin = allCabins.find(c => c.type === 'repair');
+    coolantAvailable = repairCabin?.coolant || 0;
+  }
+  
+  const canUseCoolant = cabin.type === 'repair' && 
+                        coolantAvailable > 0 && 
+                        !cabin.damaged &&
+                        allCabins?.some(c => c.temperature > 0 && !c.damaged) === true;
   
   let riskText = '安全';
   switch (riskLevel) {
@@ -868,5 +899,5 @@ export function getCabinHeatStatus(
     case 'critical': riskText = '危险'; break;
   }
   
-  return { riskLevel, riskText, tempPercent, canUseCoolant };
+  return { riskLevel, riskText, tempPercent, canUseCoolant, coolantAvailable };
 }

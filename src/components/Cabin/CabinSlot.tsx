@@ -10,8 +10,9 @@ interface CabinSlotProps {
   totalPoints: number;
   onDrop: (cabinType: CabinType, dieId: string) => void;
   onRemoveDie: (dieId: string) => void;
-  onUseCoolant?: (cabinType: CabinType) => void;
+  onUseCoolant?: () => void;
   heatTransfers?: HeatTransfer[];
+  allCabins: Cabin[];
   disabled?: boolean;
   canUseCoolant?: boolean;
 }
@@ -40,6 +41,7 @@ export const CabinSlot: React.FC<CabinSlotProps> = ({
   onRemoveDie,
   onUseCoolant,
   heatTransfers = [],
+  allCabins,
   disabled,
   canUseCoolant = false,
 }) => {
@@ -47,7 +49,8 @@ export const CabinSlot: React.FC<CabinSlotProps> = ({
   const { config } = useConfigStore();
   const isOverheated = totalPoints > config.overheatThreshold;
   const isDamaged = cabin.damaged;
-  const heatStatus = getCabinHeatStatus(cabin, config);
+  const heatStatus = getCabinHeatStatus(cabin, config, allCabins);
+  const isRepairCabin = cabin.type === 'repair';
   
   const incomingTransfers = heatTransfers.filter(t => t.to === cabin.type);
   const outgoingTransfers = heatTransfers.filter(t => t.from === cabin.type);
@@ -71,8 +74,8 @@ export const CabinSlot: React.FC<CabinSlotProps> = ({
 
   const handleUseCoolant = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (onUseCoolant && heatStatus.canUseCoolant && canUseCoolant) {
-      onUseCoolant(cabin.type);
+    if (onUseCoolant && heatStatus.canUseCoolant && canUseCoolant && isRepairCabin) {
+      onUseCoolant();
     }
   };
 
@@ -128,10 +131,12 @@ export const CabinSlot: React.FC<CabinSlotProps> = ({
       <div className="mb-2">
         <div className="flex justify-between text-xs text-gray-400 mb-1">
           <span>温度: {cabin.temperature}/{cabin.maxTemperature}°</span>
-          <div className="flex items-center gap-1">
-            <Snowflake className="w-3 h-3" />
-            <span>{cabin.coolant}/{cabin.maxCoolant}</span>
-          </div>
+          {isRepairCabin && (
+            <div className="flex items-center gap-1">
+              <Snowflake className="w-3 h-3" />
+              <span>{heatStatus.coolantAvailable}/{cabin.maxCoolant}</span>
+            </div>
+          )}
         </div>
         <div className="stat-bar">
           <div
@@ -195,14 +200,14 @@ export const CabinSlot: React.FC<CabinSlotProps> = ({
           </div>
         )}
         
-        {onUseCoolant && heatStatus.canUseCoolant && canUseCoolant && !isDamaged && (
+        {isRepairCabin && onUseCoolant && heatStatus.canUseCoolant && canUseCoolant && !isDamaged && (
           <button
             onClick={handleUseCoolant}
             className="px-2 py-1 bg-neon-cyan/20 border border-neon-cyan text-neon-cyan text-xs rounded flex items-center gap-1 hover:bg-neon-cyan/30 transition-colors"
-            title="使用冷却剂降温"
+            title="释放冷却剂给温度最高的舱室降温"
           >
             <Snowflake className="w-3 h-3" />
-            冷却
+            释放冷却剂
           </button>
         )}
       </div>
